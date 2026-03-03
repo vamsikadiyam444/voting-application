@@ -1,51 +1,126 @@
-# Example Voting App
+# Voting App — CI/CD with Azure DevOps, AKS & ArgoCD
 
-A simple distributed application running across multiple Docker containers.
+# Tech stack
 
-## Getting started
-
-Download [Docker Desktop](https://www.docker.com/products/docker-desktop) for Mac or Windows. [Docker Compose](https://docs.docker.com/compose) will be automatically installed. On Linux, make sure you have the latest version of [Compose](https://docs.docker.com/compose/install/).
-
-This solution uses Python, Node.js, .NET, with Redis for messaging and Postgres for storage.
-
-Run in this directory to build and run the app:
-
-```shell
-docker compose up
+```bash
+- Azure Kubernetes Service (AKS)
+- Azure Container Registry (ACR)
+- Azure DevOps Pipelines
+- ArgoCD (GitOps)
+- Docker
+- Kubernetes
+- Node.js (Result App)
+- Python (Vote App)
+- PostgreSQL
+- Redis
 ```
 
-The `vote` app will be running at [http://localhost:8080](http://localhost:8080), and the `results` will be at [http://localhost:8081](http://localhost:8081).
+# Step1 Create A AKS cluster and resource Group  
 
-Alternately, if you want to run it on a [Docker Swarm](https://docs.docker.com/engine/swarm/), first make sure you have a swarm. If you don't, run:
+```bash
+# Create resource group
+az group create --name azurecicd --location switzerlandnorth
 
-```shell
-docker swarm init
+# Create AKS cluster
+az aks create \
+  --resource-group azurecicd \
+  --name azurecicd \
+  --node-count 1 \
+  --enable-addons monitoring \
+  --generate-ssh-keys
+
+# Get credentials
+az aks get-credentials --resource-group azurecicd --name azurecicd
+
+# Verify
+kubectl get nodes
 ```
 
-Once you have your swarm, in this directory run:
+# Step-2 Create Azure Container Registry 
 
-```shell
-docker stack deploy --compose-file docker-stack.yml vote
+```bash
+# Create ACR
+az acr create \
+  --resource-group azurecicd \
+  --name azurecicd1 \
+  --sku Basic
+
+# Attach ACR to AKS (allows AKS to pull images)
+az aks update \
+  --name azurecicd \
+  --resource-group azurecicd \
+  --attach-acr azurecicd1
 ```
 
-## Run the app in Kubernetes
+# Step-3 Install ArgoCD on AKS
 
-The folder k8s-specifications contains the YAML specifications of the Voting App's services.
+```bash
+# Create namespace
+kubectl create namespace argocd
 
-Run the following command to create the deployments and services. Note it will create these resources in your current namespace (`default` if you haven't changed it.)
+# Install ArgoCD
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
-```shell
-kubectl create -f k8s-specifications/
+# Expose ArgoCD server as NodePort
+kubectl patch svc argocd-server -n argocd \
+  -p '{"spec": {"type": "NodePort"}}'
+
+# Get ArgoCD admin password
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath="{.data.password}" | base64 -d
+
+# Check ArgoCD pods
+kubectl get pods -n argocd
+
+# Check ArgoCD services
+kubectl get svc -n argocd
 ```
 
-The `vote` web app is then available on port 31000 on each host of the cluster, the `result` web app is available on port 31001.
+# Step-4 Useful Commands 
 
-To remove them, run:
+```bash
+# Check all pods
+kubectl get pods -n argocd
 
-```shell
-kubectl delete -f k8s-specifications/
+# Check all services
+kubectl get svc -n argocd
+
+# Check node IP
+kubectl get nodes -o wide
+
+# Describe failing pod
+kubectl describe pod <pod-name> -n argocd
+
+# Check pod logs
+kubectl logs <pod-name> -n argocd
+
+# Restart deployments (one time fix)
+kubectl rollout restart deployment vote -n argocd
+kubectl rollout restart deployment result -n argocd
+kubectl rollout restart deployment worker -n argocd
+
+# Check ArgoCD application status
+kubectl describe application -n argocd
 ```
 
+# Step-5 Access the Application
+
+```bash
+# Get node public IP
+kubectl get nodes -o wide
+
+# Access via browser
+Vote App    → http://<NODE-IP>:31000
+Result App  → http://<NODE-IP>:31001
+ArgoCD UI   → https://<NODE-IP>:30868
+```
+
+# Step-6 To Delete the resources 
+
+```bash
+# Delete everything
+az group delete -n azurecicd --yes --no-wait
+```
 ## Architecture
 
 ![Architecture diagram](architecture.excalidraw.png)
@@ -56,10 +131,3 @@ kubectl delete -f k8s-specifications/
 * A [Postgres](https://hub.docker.com/_/postgres/) database backed by a Docker volume
 * A [Node.js](/result) web app which shows the results of the voting in real time
 
-## Notes
-
-The voting application only accepts one vote per client browser. It does not register additional votes if a vote has already been submitted from a client.
-
-This isn't an example of a properly architected perfectly designed distributed app... it's just a simple
-example of the various types of pieces and languages you might see (queues, persistent data, etc), and how to
-deal with them in Docker at a basic level.
